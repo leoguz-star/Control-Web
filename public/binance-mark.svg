@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 126 126" width="126" height="126" aria-label="Binance">
+  <g fill="#FCD535">
+    <path d="M38.7 53.7L63 29.4l24.3 24.3L101.4 39.6 63 1.2 24.6 39.6z"></path>
+    <path d="M1.2 63L15.3 48.9 29.4 63 15.3 77.1z"></path>
+    <path d="M38.7 72.3L63 96.6l24.3-24.3 14.1 14.1L63 124.8 24.6 86.4z"></path>
+    <path d="M96.6 63l14.1-14.1L124.8 63l-14.1 14.1z"></path>
+    <path d="M77.1 63L63 48.9 52.5 59.4l-1.2 1.2-2.4 2.4 14.1 14.1z"></path>
+  </g>
+</svg>

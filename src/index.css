@@ -1,0 +1,6 @@
+@import "./styles/binance-tokens.css";
+@import "./styles/control-web.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
