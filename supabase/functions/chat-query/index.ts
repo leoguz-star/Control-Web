@@ -236,25 +236,28 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
       const n = params.top_n ?? 5
       let q = db
         .from('transactions')
-        .select('client_id, monto_usdt, clients(name)')
+        .select('client_id, monto_usdt, monto_divisa, clients(name)')
         .eq('category', 'VENTA')
         .eq('status', 'CONCILIADO')
       if (params.fecha_desde) q = q.gte('date', params.fecha_desde)
       if (params.fecha_hasta) q = q.lte('date', params.fecha_hasta)
       const { data } = await q
       if (!data || data.length === 0) return 'No hay ventas conciliadas en ese período.'
-      const map = new Map<string, { name: string; total: number; count: number }>()
-      for (const t of data) {
+      const map = new Map<string, { name: string; usdt: number; divisa: number; count: number }>()
+      for (const t of data as Array<{ client_id: string | null; monto_usdt: number | null; monto_divisa: number | null; clients: { name: string } | null }>) {
         const cId = t.client_id ?? '__sin_cliente__'
-        const cName = (t.clients as { name: string } | null)?.name ?? 'Sin cliente'
-        const e = map.get(cId) ?? { name: cName, total: 0, count: 0 }
-        e.total += t.monto_usdt ?? 0
+        const cName = t.clients?.name ?? 'Sin cliente'
+        const e = map.get(cId) ?? { name: cName, usdt: 0, divisa: 0, count: 0 }
+        e.usdt += t.monto_usdt ?? 0
+        e.divisa += t.monto_divisa ?? 0
         e.count += 1
         map.set(cId, e)
       }
-      const sorted = [...map.values()].sort((a, b) => b.total - a.total).slice(0, n)
+      const sorted = [...map.values()].sort((a, b) => b.usdt - a.usdt).slice(0, n)
       const periodo = params.fecha_desde ? ` (${params.fecha_desde} → ${params.fecha_hasta ?? today})` : ''
-      const lines = sorted.map((c, i) => `${i + 1}. ${c.name} — $${fmtUSD(c.total)} USDT (${c.count} op.)`)
+      const lines = sorted.map((c, i) =>
+        `${i + 1}. ${c.name} — $${fmtUSD(c.usdt)} USDT / ${fmtUSD(c.divisa)} (${c.count} op.)`
+      )
       return `Top ${sorted.length} clientes por volumen${periodo}:\n${lines.join('\n')}`
     }
 
