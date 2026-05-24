@@ -8,6 +8,7 @@ const tabs = [
   { to: '/', label: 'Dashboard', end: true },
   { to: '/transacciones', label: 'Transacciones' },
   { to: '/importar', label: 'Importar' },
+  { to: '/chatbot', label: 'Asistente' },
 ]
 
 export default function Layout() {

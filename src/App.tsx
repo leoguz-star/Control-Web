@@ -4,6 +4,7 @@ import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
 import Transacciones from '@/pages/Transacciones'
 import Importar from '@/pages/Importar'
+import Chatbot from '@/pages/Chatbot'
 import { useAuth } from '@/hooks/useAuth'
 
 export default function App() {
@@ -26,6 +27,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="transacciones" element={<Transacciones />} />
           <Route path="importar" element={<Importar />} />
+          <Route path="chatbot" element={<Chatbot />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
