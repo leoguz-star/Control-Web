@@ -7,9 +7,9 @@ interface Message {
 }
 
 const SUGGESTIONS = [
+  '¿Qué puedo consultar?',
   '¿Quiénes me deben dinero?',
   '¿Cómo están los saldos?',
-  'Top 5 clientes por volumen',
   'Resumen de este mes',
 ]
 

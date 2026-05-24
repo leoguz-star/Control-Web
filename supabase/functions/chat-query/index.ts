@@ -52,6 +52,7 @@ const INTENTS_DESCRIPTION = `
 - clientes_frecuentes: Clientes que más veces han comprado. Opcional: top_n.
 - ganancia_total_periodo: Ganancia neta (suma de dif_usd) en un período. Requiere fecha_desde y fecha_hasta.
 - bolivar_summary: Resumen del lado en bolívares (ganancias en Bs, comisiones, etc.).
+- ayuda: El usuario pregunta qué puede consultar, qué sabe el asistente, o qué tipos de preguntas puede hacer.
 - desconocido: La pregunta no encaja en ningún intent conocido.
 `
 
@@ -91,10 +92,10 @@ serve(async (req) => {
   if (!body.pregunta?.trim()) return json({ error: 'Falta la pregunta' }, 400)
 
   const today = new Date().toISOString().split('T')[0]
-  const intentResult = await classifyIntent(body.pregunta, today)
+  const { result: intentResult, error: intentError } = await classifyIntent(body.pregunta, today)
 
   if (!intentResult) {
-    return json({ respuesta: 'Ocurrió un error al entender tu pregunta. Intenta de nuevo.' }, 200)
+    return json({ respuesta: `Error al clasificar la pregunta: ${intentError ?? 'desconocido'}` }, 200)
   }
 
   if (intentResult.intent === 'desconocido') {
@@ -115,7 +116,10 @@ serve(async (req) => {
   }
 })
 
-async function classifyIntent(pregunta: string, today: string): Promise<IntentResult | null> {
+async function classifyIntent(
+  pregunta: string,
+  today: string,
+): Promise<{ result: IntentResult | null; error: string | null }> {
   const prompt = `Eres un clasificador de intenciones para un sistema de consultas de un negocio de intercambio de divisas (USDT/Bs/EUR).
 Hoy es ${today}.
 
@@ -131,28 +135,37 @@ Reglas:
 
 Pregunta: "${pregunta}"`
 
-  const r = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: INTENT_SCHEMA,
-        },
-      }),
-    }
-  )
+  let r: Response
+  try {
+    r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent?key=${GEMINI_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: INTENT_SCHEMA,
+          },
+        }),
+      }
+    )
+  } catch (e) {
+    return { result: null, error: `fetch failed: ${e}` }
+  }
 
-  if (!r.ok) return null
+  if (!r.ok) {
+    const errText = await r.text()
+    return { result: null, error: `Gemini ${r.status}: ${errText}` }
+  }
+
   const data = await r.json()
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}'
   try {
-    return JSON.parse(text) as IntentResult
-  } catch {
-    return null
+    return { result: JSON.parse(text) as IntentResult, error: null }
+  } catch (e) {
+    return { result: null, error: `JSON parse failed: ${e} — raw: ${text}` }
   }
 }
 
@@ -279,14 +292,15 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
     case 'transacciones_pendientes': {
       const { data } = await db
         .from('transactions')
-        .select('date, category, monto_usdt, clients(name)')
+        .select('date, category, monto_usdt, monto_divisa, clients(name)')
         .eq('status', 'PENDIENTE')
         .order('date', { ascending: false })
         .limit(15)
       if (!data || data.length === 0) return 'No hay transacciones pendientes.'
       const lines = data.map((t) => {
         const cName = (t.clients as { name: string } | null)?.name ?? '—'
-        return `• ${t.date} | ${t.category} | ${cName} | $${fmtUSD(t.monto_usdt ?? 0)}`
+        const divisa = t.monto_divisa != null ? ` / ${fmtUSD(t.monto_divisa)}` : ''
+        return `• ${t.date} | ${t.category} | ${cName} | $${fmtUSD(t.monto_usdt ?? 0)} USDT${divisa}`
       })
       return `Transacciones pendientes:\n${lines.join('\n')}`
     }
@@ -297,12 +311,15 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
       if (!client) return `No encontré ningún cliente con el nombre "${params.nombre}".`
       const { data } = await db
         .from('transactions')
-        .select('date, category, monto_usdt, status')
+        .select('date, category, monto_usdt, monto_divisa, status')
         .eq('client_id', client.id)
         .order('date', { ascending: false })
         .limit(10)
       if (!data || data.length === 0) return `${client.name} no tiene transacciones registradas.`
-      const lines = data.map((t) => `• ${t.date} | ${t.category} | $${fmtUSD(t.monto_usdt ?? 0)} | ${t.status}`)
+      const lines = data.map((t) => {
+        const divisa = t.monto_divisa != null ? ` / ${fmtUSD(t.monto_divisa)}` : ''
+        return `• ${t.date} | ${t.category} | $${fmtUSD(t.monto_usdt ?? 0)} USDT${divisa} | ${t.status}`
+      })
       return `Últimas ${data.length} transacciones de ${client.name}:\n${lines.join('\n')}`
     }
 
@@ -426,25 +443,27 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
       if (!client) return `No encontré ningún cliente con el nombre "${params.nombre}".`
       const { data } = await db
         .from('transactions')
-        .select('date, category, monto_usdt, status')
+        .select('date, category, monto_usdt, monto_divisa, status')
         .eq('client_id', client.id)
         .order('date', { ascending: false })
         .limit(1)
         .single()
       if (!data) return `${client.name} no tiene transacciones registradas.`
-      return `Última transacción de ${client.name}: ${data.date} | ${data.category} | $${fmtUSD(data.monto_usdt ?? 0)} USDT | ${data.status}.`
+      const divisa = data.monto_divisa != null ? ` / ${fmtUSD(data.monto_divisa)}` : ''
+      return `Última transacción de ${client.name}: ${data.date} | ${data.category} | $${fmtUSD(data.monto_usdt ?? 0)} USDT${divisa} | ${data.status}.`
     }
 
     case 'transacciones_hoy': {
       const { data } = await db
         .from('transactions')
-        .select('category, monto_usdt, status, clients(name)')
+        .select('category, monto_usdt, monto_divisa, status, clients(name)')
         .eq('date', today)
         .order('created_at', { ascending: false })
       if (!data || data.length === 0) return `No hay transacciones registradas para hoy (${today}).`
       const lines = data.map((t) => {
         const cName = (t.clients as { name: string } | null)?.name ?? '—'
-        return `• ${t.category} | ${cName} | $${fmtUSD(t.monto_usdt ?? 0)} | ${t.status}`
+        const divisa = t.monto_divisa != null ? ` / ${fmtUSD(t.monto_divisa)}` : ''
+        return `• ${t.category} | ${cName} | $${fmtUSD(t.monto_usdt ?? 0)} USDT${divisa} | ${t.status}`
       })
       return `Transacciones de hoy (${today}):\n${lines.join('\n')}`
     }
@@ -490,6 +509,32 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
       if (!data) return 'No hay datos de bolívares.'
       return `Resumen Bs:\n• Ventas: ${data.ventas_count}\n• DIF Bs total: ${fmtUSD(Number(data.dif_bs_total))}\n• Com. Pago Móvil: ${fmtUSD(Number(data.comision_pago_movil_total))}\n• Com. Binance: ${fmtUSD(Number(data.comision_binance_total))}\n• DIF Bs neto: ${fmtUSD(Number(data.dif_bs_neto_total))}\n• DIF USD neto: $${fmtUSD(Number(data.dif_usd_neto_total))}`
     }
+
+    case 'ayuda':
+      return `Puedo responder consultas sobre:\n\n` +
+        `Clientes\n` +
+        `• Deuda de un cliente ("¿cuánto debe Juan?")\n` +
+        `• Total de ventas de un cliente ("ventas de María en mayo")\n` +
+        `• Historial de operaciones de un cliente\n` +
+        `• Última transacción de un cliente\n` +
+        `• Clientes con deuda pendiente\n` +
+        `• Top clientes por volumen ("top 5 clientes")\n` +
+        `• Clientes más frecuentes\n\n` +
+        `Operaciones\n` +
+        `• Transacciones de hoy\n` +
+        `• Transacciones pendientes\n` +
+        `• Resumen de un período ("resumen de mayo")\n` +
+        `• Total USDT vendido en un período\n` +
+        `• Ganancia neta de un período\n` +
+        `• Tasa promedio de un período\n` +
+        `• Margen promedio de un período\n\n` +
+        `Cuentas y socios\n` +
+        `• Saldo de una cuenta ("¿cuánto hay en efectivo?")\n` +
+        `• Saldo de todas las cuentas\n` +
+        `• Efectivo pendiente de conciliar\n` +
+        `• Comisión de un socio ("comisión de Vito")\n` +
+        `• Pagos realizados a socios\n` +
+        `• Resumen en bolívares`
 
     default:
       return 'No entendí tu pregunta.'
