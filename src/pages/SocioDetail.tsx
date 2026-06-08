@@ -8,9 +8,11 @@ import {
   PendingCashCard,
 } from '@/components/SaldoCards'
 import TransactionTable from '@/components/TransactionTable'
+import AuditList from '@/components/AuditList'
 import { useTransactions } from '@/hooks/useTransactions'
 import type {
   AccountBalance,
+  AuditLogEntry,
   BolivarSummary,
   CashPending,
 } from '@/types/database'
@@ -31,6 +33,7 @@ export default function SocioDetail() {
   const [cashPending, setCashPending] = useState<CashPending | null>(null)
   const [bolivares, setBolivares] = useState<BolivarSummary | null>(null)
   const [partners, setPartners] = useState<PartnerByOwner[]>([])
+  const [audit, setAudit] = useState<AuditLogEntry[]>([])
   const [loading, setLoading] = useState(true)
 
   const { rows: txRows } = useTransactions({ ownerPartnerId: id })
@@ -38,7 +41,7 @@ export default function SocioDetail() {
   useEffect(() => {
     let mounted = true
     async function load() {
-      const [p, acc, cp, bo, pb] = await Promise.all([
+      const [p, acc, cp, bo, pb, au] = await Promise.all([
         supabase.from('partners').select('name').eq('id', id).maybeSingle(),
         supabase
           .from('account_balances')
@@ -59,6 +62,11 @@ export default function SocioDetail() {
           .from('partner_balances_by_owner')
           .select('*')
           .eq('caja_partner_id', id),
+        supabase
+          .from('audit_log_view')
+          .select('*')
+          .eq('owner_partner_id', id)
+          .limit(100),
       ])
       if (!mounted) return
       setName((p.data?.name as string) ?? 'Socio')
@@ -66,6 +74,7 @@ export default function SocioDetail() {
       setCashPending((cp.data as CashPending) ?? null)
       setBolivares((bo.data as BolivarSummary) ?? null)
       if (pb.data) setPartners(pb.data as PartnerByOwner[])
+      if (au.data) setAudit(au.data as AuditLogEntry[])
       setLoading(false)
     }
     load()
@@ -232,6 +241,21 @@ export default function SocioDetail() {
         </div>
         <TransactionTable rows={txRows} onChanged={() => {}} readOnly />
       </section>
+
+      {/* Actividad / auditoría */}
+      {audit.length > 0 && (
+        <section className="cw-section">
+          <div className="cw-section-head">
+            <div>
+              <div className="cw-section-title">Actividad</div>
+              <div className="cw-section-sub">
+                Creaciones, ediciones y borrados en esta caja
+              </div>
+            </div>
+          </div>
+          <AuditList entries={audit} />
+        </section>
+      )}
     </div>
   )
 }

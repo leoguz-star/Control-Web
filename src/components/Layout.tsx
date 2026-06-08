@@ -23,6 +23,7 @@ export default function Layout() {
     ...(isAdmin
       ? [
           { to: '/cajas', label: 'Cajas de socios' },
+          { to: '/auditoria', label: 'Auditoría' },
           { to: '/configuracion', label: 'Configuración' },
         ]
       : []),

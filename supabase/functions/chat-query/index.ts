@@ -7,7 +7,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const GEMINI_KEY = Deno.env.get('GEMINI_API_KEY')
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
-const SUPABASE_SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!
 const MODEL = 'gemini-2.5-flash'
 
 const corsHeaders = {
@@ -30,6 +30,22 @@ interface IntentResult {
 }
 
 type DB = ReturnType<typeof createClient>
+
+interface Scope {
+  isAdmin: boolean
+  cajaOwner: string | null
+}
+
+// Acota una query a la caja del que pregunta: admin -> casa (owner NULL);
+// socio -> la suya. Para tablas con owner_partner_id (transactions, clients).
+// Genérico para preservar el tipo del builder (y la inferencia de las filas).
+function scopeOwner<T>(q: T, scope: Scope): T {
+  // deno-lint-ignore no-explicit-any
+  const qq = q as any
+  return (scope.isAdmin
+    ? qq.is('owner_partner_id', null)
+    : qq.eq('owner_partner_id', scope.cajaOwner)) as T
+}
 
 const INTENTS_DESCRIPTION = `
 - deuda_cliente: Cuánto debe un cliente específico (ventas PENDIENTE de ese cliente). Requiere params.nombre.
@@ -105,10 +121,27 @@ serve(async (req) => {
     }, 200)
   }
 
-  const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+  // Cliente ligado al JWT del que pregunta: la RLS acota TODO a su caja.
+  const authHeader = req.headers.get('Authorization') ?? ''
+  const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: authHeader } },
+  })
+
+  // Caja del que pregunta: admin -> casa (owner NULL); socio -> la suya.
+  const [{ data: isAdmin }, { data: partnerId }] = await Promise.all([
+    db.rpc('is_admin'),
+    db.rpc('current_partner_id'),
+  ])
+  if (isAdmin !== true && !partnerId) {
+    return json({ respuesta: 'No pude identificar tu usuario para responder.' }, 200)
+  }
+  const scope: Scope = {
+    isAdmin: isAdmin === true,
+    cajaOwner: isAdmin === true ? null : (partnerId as string),
+  }
 
   try {
-    const respuesta = await executeIntent(db, intentResult.intent, intentResult.params, today)
+    const respuesta = await executeIntent(db, scope, intentResult.intent, intentResult.params, today)
     return json({ respuesta }, 200)
   } catch (e) {
     console.error(e)
@@ -169,11 +202,11 @@ Pregunta: "${pregunta}"`
   }
 }
 
-async function findClientByName(db: DB, nombre: string) {
-  const { data } = await db
-    .from('clients')
-    .select('id, name')
-    .ilike('name', `%${nombre}%`)
+async function findClientByName(db: DB, scope: Scope, nombre: string) {
+  const { data } = await scopeOwner(
+    db.from('clients').select('id, name').ilike('name', `%${nombre}%`),
+    scope,
+  )
     .limit(1)
     .single()
   return data
@@ -189,15 +222,16 @@ async function findPartnerByName(db: DB, nombre: string) {
   return data
 }
 
-async function executeIntent(db: DB, intent: string, params: QueryParams, today: string): Promise<string> {
+async function executeIntent(db: DB, scope: Scope, intent: string, params: QueryParams, today: string): Promise<string> {
   switch (intent) {
     case 'deuda_cliente': {
       if (!params.nombre) return 'Necesito el nombre del cliente para buscar su deuda.'
-      const client = await findClientByName(db, params.nombre)
+      const client = await findClientByName(db, scope, params.nombre)
       if (!client) return `No encontré ningún cliente con el nombre "${params.nombre}".`
-      const { data } = await db
-        .from('transactions')
-        .select('monto_divisa, monto_usdt, accounts(name)')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('monto_divisa, monto_usdt, accounts(name)'),
+        scope,
+      )
         .eq('client_id', client.id)
         .eq('status', 'PENDIENTE')
         .eq('category', 'VENTA')
@@ -213,11 +247,9 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
 
     case 'ventas_cliente': {
       if (!params.nombre) return 'Necesito el nombre del cliente.'
-      const client = await findClientByName(db, params.nombre)
+      const client = await findClientByName(db, scope, params.nombre)
       if (!client) return `No encontré ningún cliente con el nombre "${params.nombre}".`
-      let q = db
-        .from('transactions')
-        .select('monto_usdt')
+      let q = scopeOwner(db.from('transactions').select('monto_usdt'), scope)
         .eq('client_id', client.id)
         .eq('category', 'VENTA')
         .eq('status', 'CONCILIADO')
@@ -234,9 +266,10 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
 
     case 'top_clientes': {
       const n = params.top_n ?? 5
-      let q = db
-        .from('transactions')
-        .select('client_id, monto_usdt, monto_divisa, clients(name)')
+      let q = scopeOwner(
+        db.from('transactions').select('client_id, monto_usdt, monto_divisa, clients(name)'),
+        scope,
+      )
         .eq('category', 'VENTA')
         .eq('status', 'CONCILIADO')
       if (params.fecha_desde) q = q.gte('date', params.fecha_desde)
@@ -264,7 +297,7 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
     case 'balance_cuenta': {
       if (!params.cuenta) return 'Necesito el nombre de la cuenta.'
       const { data } = await db
-        .from('account_balances')
+        .from('my_account_balances')
         .select('name, balance, currency')
         .ilike('name', `%${params.cuenta}%`)
       if (!data || data.length === 0) return `No encontré ninguna cuenta con el nombre "${params.cuenta}".`
@@ -273,7 +306,7 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
 
     case 'balance_todas_cuentas': {
       const { data } = await db
-        .from('account_balances')
+        .from('my_account_balances')
         .select('name, balance, currency')
         .order('sort_order')
       if (!data || data.length === 0) return 'No hay cuentas registradas.'
@@ -293,9 +326,10 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
     }
 
     case 'transacciones_pendientes': {
-      const { data } = await db
-        .from('transactions')
-        .select('date, category, monto_usdt, monto_divisa, clients(name)')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('date, category, monto_usdt, monto_divisa, clients(name)'),
+        scope,
+      )
         .eq('status', 'PENDIENTE')
         .order('date', { ascending: false })
         .limit(15)
@@ -310,11 +344,12 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
 
     case 'historial_cliente': {
       if (!params.nombre) return 'Necesito el nombre del cliente.'
-      const client = await findClientByName(db, params.nombre)
+      const client = await findClientByName(db, scope, params.nombre)
       if (!client) return `No encontré ningún cliente con el nombre "${params.nombre}".`
-      const { data } = await db
-        .from('transactions')
-        .select('date, category, monto_usdt, monto_divisa, status')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('date, category, monto_usdt, monto_divisa, status'),
+        scope,
+      )
         .eq('client_id', client.id)
         .order('date', { ascending: false })
         .limit(10)
@@ -330,9 +365,10 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
       const desde = params.fecha_desde
       const hasta = params.fecha_hasta ?? today
       if (!desde) return 'Necesito el período para el resumen. Ejemplo: "resumen de mayo 2026".'
-      const { data } = await db
-        .from('transactions')
-        .select('monto_usdt, dif_usd, status')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('monto_usdt, dif_usd, status'),
+        scope,
+      )
         .eq('category', 'VENTA')
         .gte('date', desde)
         .lte('date', hasta)
@@ -347,9 +383,10 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
       const desde = params.fecha_desde
       const hasta = params.fecha_hasta ?? today
       if (!desde) return 'Necesito el período. Ejemplo: "tasa promedio de mayo".'
-      const { data } = await db
-        .from('transactions')
-        .select('tasa_usdt')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('tasa_usdt'),
+        scope,
+      )
         .eq('category', 'VENTA')
         .not('tasa_usdt', 'is', null)
         .gte('date', desde)
@@ -363,9 +400,10 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
       const desde = params.fecha_desde
       const hasta = params.fecha_hasta ?? today
       if (!desde) return 'Necesito el período.'
-      const { data } = await db
-        .from('transactions')
-        .select('margen_pct')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('margen_pct'),
+        scope,
+      )
         .eq('category', 'VENTA')
         .eq('status', 'CONCILIADO')
         .not('margen_pct', 'is', null)
@@ -377,9 +415,10 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
     }
 
     case 'clientes_deudores': {
-      const { data } = await db
-        .from('transactions')
-        .select('client_id, monto_divisa, clients(name)')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('client_id, monto_divisa, clients(name)'),
+        scope,
+      )
         .eq('status', 'PENDIENTE')
         .eq('category', 'VENTA')
       if (!data || data.length === 0) return 'No hay clientes con deuda pendiente.'
@@ -407,9 +446,10 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
       const desde = params.fecha_desde
       const hasta = params.fecha_hasta ?? today
       if (!desde) return 'Necesito el período.'
-      const { data } = await db
-        .from('transactions')
-        .select('monto_usdt')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('monto_usdt'),
+        scope,
+      )
         .eq('category', 'VENTA')
         .eq('status', 'CONCILIADO')
         .gte('date', desde)
@@ -420,9 +460,10 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
     }
 
     case 'pagos_socios': {
-      let q = db
-        .from('transactions')
-        .select('date, monto_usdt, partners(name)')
+      let q = scopeOwner(
+        db.from('transactions').select('date, monto_usdt, partners(name)'),
+        scope,
+      )
         .eq('category', 'PAGO')
         .order('date', { ascending: false })
         .limit(10)
@@ -442,11 +483,12 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
 
     case 'ultima_transaccion_cliente': {
       if (!params.nombre) return 'Necesito el nombre del cliente.'
-      const client = await findClientByName(db, params.nombre)
+      const client = await findClientByName(db, scope, params.nombre)
       if (!client) return `No encontré ningún cliente con el nombre "${params.nombre}".`
-      const { data } = await db
-        .from('transactions')
-        .select('date, category, monto_usdt, monto_divisa, status')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('date, category, monto_usdt, monto_divisa, status'),
+        scope,
+      )
         .eq('client_id', client.id)
         .order('date', { ascending: false })
         .limit(1)
@@ -457,9 +499,10 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
     }
 
     case 'transacciones_hoy': {
-      const { data } = await db
-        .from('transactions')
-        .select('category, monto_usdt, monto_divisa, status, clients(name)')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('category, monto_usdt, monto_divisa, status, clients(name)'),
+        scope,
+      )
         .eq('date', today)
         .order('created_at', { ascending: false })
       if (!data || data.length === 0) return `No hay transacciones registradas para hoy (${today}).`
@@ -473,9 +516,10 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
 
     case 'clientes_frecuentes': {
       const n = params.top_n ?? 5
-      const { data } = await db
-        .from('transactions')
-        .select('client_id, clients(name)')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('client_id, clients(name)'),
+        scope,
+      )
         .eq('category', 'VENTA')
       if (!data || data.length === 0) return 'No hay ventas registradas.'
       const map = new Map<string, { name: string; count: number }>()
@@ -495,9 +539,10 @@ async function executeIntent(db: DB, intent: string, params: QueryParams, today:
       const desde = params.fecha_desde
       const hasta = params.fecha_hasta ?? today
       if (!desde) return 'Necesito el período.'
-      const { data } = await db
-        .from('transactions')
-        .select('dif_usd')
+      const { data } = await scopeOwner(
+        db.from('transactions').select('dif_usd'),
+        scope,
+      )
         .eq('category', 'VENTA')
         .eq('status', 'CONCILIADO')
         .gte('date', desde)

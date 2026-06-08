@@ -109,3 +109,20 @@ export interface CashPending {
   efectivo_pendiente: number
   ventas_pendientes: number
 }
+
+export type AuditAction = 'INSERT' | 'UPDATE' | 'DELETE'
+
+export interface AuditLogEntry {
+  id: string
+  table_name: string
+  record_id: string | null
+  action: AuditAction
+  actor_partner_id: string | null
+  actor_name: string | null
+  owner_partner_id: string | null
+  owner_name: string | null
+  changed_fields: string[] | null
+  old_data: Record<string, unknown> | null
+  new_data: Record<string, unknown> | null
+  created_at: string
+}

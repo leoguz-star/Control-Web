@@ -4,6 +4,7 @@ import Login from '@/pages/Login'
 import Dashboard from '@/pages/Dashboard'
 import CajasSocios from '@/pages/CajasSocios'
 import Configuracion from '@/pages/Configuracion'
+import Auditoria from '@/pages/Auditoria'
 import SocioDetail from '@/pages/SocioDetail'
 import Transacciones from '@/pages/Transacciones'
 import Importar from '@/pages/Importar'
@@ -30,6 +31,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="cajas" element={<CajasSocios />} />
           <Route path="configuracion" element={<Configuracion />} />
+          <Route path="auditoria" element={<Auditoria />} />
           <Route path="socios/:id" element={<SocioDetail />} />
           <Route path="transacciones" element={<Transacciones />} />
           <Route path="importar" element={<Importar />} />
