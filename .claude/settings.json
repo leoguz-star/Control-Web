@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:api.anthropic.com)",
-      "Bash(tar -xf package)"
+      "Bash(tar -xf package)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(node -e \"const s=require\\('fs'\\).readFileSync\\('src/lib/socio.ts','utf8'\\); const i=s.indexOf\\('replace\\(/['\\); console.log\\(JSON.stringify\\(s.slice\\(i,i+25\\)\\)\\)\")",
+      "Bash(git check-ignore *)",
+      "Bash(git commit -m '@ *)"
     ]
   }
 }

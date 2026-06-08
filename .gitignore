@@ -4,6 +4,15 @@ dist-ssr
 .env
 .env.local
 *.local
+
+# Archivos de entorno reales (staging/prod): nunca commitear secretos.
+# Solo se versionan las plantillas *.example.
+.env.*
+!.env.example
+!.env.staging.example
+
+# Temporales del CLI de Supabase
+supabase/.temp/
 .DS_Store
 .vscode/*
 !.vscode/extensions.json

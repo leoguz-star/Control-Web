@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { useIsAdmin } from './useIsAdmin'
 import type {
   Transaction,
   TransactionCategory,
@@ -20,15 +21,19 @@ export interface TransactionFilters {
   accountId?: string | ''
   status?: TransactionStatus | ''
   search?: string
+  /** Drill-down del admin: ver la caja de un socio concreto en vez de la propia. */
+  ownerPartnerId?: string
 }
 
 export function useTransactions(filters: TransactionFilters) {
+  const isAdmin = useIsAdmin()
   const [rows, setRows] = useState<TransactionRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const lastReq = useRef(0)
 
   const fetchRows = useCallback(async () => {
+    if (isAdmin === null) return // esperar a saber el rol
     setLoading(true)
     setError(null)
     const reqId = ++lastReq.current
@@ -48,6 +53,14 @@ export function useTransactions(filters: TransactionFilters) {
       .order('created_at', { ascending: false })
       .limit(500)
 
+    // Drill-down: caja de un socio concreto. Si no, admin -> casa (owner NULL);
+    // socio -> la RLS ya lo limita a lo suyo.
+    if (filters.ownerPartnerId) {
+      q = q.eq('owner_partner_id', filters.ownerPartnerId)
+    } else if (isAdmin) {
+      q = q.is('owner_partner_id', null)
+    }
+
     if (filters.from) q = q.gte('date', filters.from)
     if (filters.to) q = q.lte('date', filters.to)
     if (filters.category) q = q.eq('category', filters.category)
@@ -63,7 +76,15 @@ export function useTransactions(filters: TransactionFilters) {
     }
     setRows((data ?? []) as unknown as TransactionRow[])
     setLoading(false)
-  }, [filters.from, filters.to, filters.category, filters.accountId, filters.status])
+  }, [
+    isAdmin,
+    filters.from,
+    filters.to,
+    filters.category,
+    filters.accountId,
+    filters.status,
+    filters.ownerPartnerId,
+  ])
 
   useEffect(() => {
     fetchRows()

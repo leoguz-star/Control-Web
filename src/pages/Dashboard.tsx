@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { fmtBs, fmtNum, fmtUSD } from '@/lib/format'
+import { fmtBs, fmtUSD } from '@/lib/format'
+import { AccountCard, BsStat, PendingCashCard } from '@/components/SaldoCards'
 import type {
   AccountBalance,
   BolivarSummary,
@@ -20,7 +21,7 @@ export default function Dashboard() {
     let mounted = true
     async function load() {
       const [a, p, b, cp] = await Promise.all([
-        supabase.from('account_balances').select('*').order('sort_order'),
+        supabase.from('my_account_balances').select('*').order('sort_order'),
         supabase.from('partner_balances').select('*'),
         supabase.from('bolivar_summary').select('*').single(),
         supabase.from('cash_pending').select('*').single(),
@@ -33,8 +34,20 @@ export default function Dashboard() {
       setLoading(false)
     }
     load()
+
+    // Refresco en tiempo real: cualquier cambio en transactions recarga el panel.
+    const channel = supabase
+      .channel('dashboard-tx')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'transactions' },
+        () => load(),
+      )
+      .subscribe()
+
     return () => {
       mounted = false
+      supabase.removeChannel(channel)
     }
   }, [])
 
@@ -89,7 +102,7 @@ export default function Dashboard() {
         </div>
 
         <div className="cw-total">
-          Total cuentas <span className="cw-muted">(conciliado, incl. Binance):</span>
+          Total cuentas <span className="cw-muted">(divisa conciliada + Binance):</span>
           <strong>{fmtUSD(totalUsd)}</strong>
         </div>
       </section>
@@ -193,103 +206,3 @@ export default function Dashboard() {
   )
 }
 
-function iconClassFor(a: AccountBalance): string {
-  if (a.name === 'BINANCE') return 'binance'
-  if (a.name === 'EFECTIVO') return 'cash'
-  if (a.name === 'EURO') return 'eur'
-  return 'usd'
-}
-
-function glyphFor(a: AccountBalance): string {
-  if (a.name === 'BINANCE') return 'B'
-  if (a.name === 'EFECTIVO') return '$'
-  if (a.name === 'EURO') return '€'
-  return a.name.slice(0, 4).toUpperCase()
-}
-
-function AccountCard({
-  acct,
-  active,
-  onClick,
-}: {
-  acct: AccountBalance
-  active: boolean
-  onClick: () => void
-}) {
-  const isBinance = acct.name === 'BINANCE'
-  const isEur = acct.name === 'EURO'
-  const balance = Number(acct.balance)
-
-  return (
-    <div
-      className={`cw-acct${active ? ' is-active' : ''}`}
-      onClick={onClick}
-    >
-      <div className="cw-acct-row">
-        <span className="cw-acct-label">{acct.name}</span>
-        <span className={`cw-acct-icon ${iconClassFor(acct)}`}>
-          {glyphFor(acct)}
-        </span>
-      </div>
-      <div className="cw-acct-amount">
-        {isBinance ? (
-          <>
-            {fmtNum(balance)}
-            <span className="unit">USDT</span>
-          </>
-        ) : isEur ? (
-          <>€{fmtNum(balance)}</>
-        ) : (
-          <>${fmtNum(balance)}</>
-        )}
-      </div>
-      <div className="cw-acct-meta">
-        {isBinance
-          ? 'Spot wallet'
-          : balance > 0
-            ? 'Disponible'
-            : 'Sin movimientos'}
-      </div>
-    </div>
-  )
-}
-
-function BsStat({
-  label,
-  value,
-  tone,
-}: {
-  label: string
-  value: string
-  tone?: 'up' | 'down'
-}) {
-  return (
-    <div className="cw-bs-stat">
-      <div className="lbl">{label}</div>
-      <div className={`val${tone ? ' ' + tone : ''}`}>{value}</div>
-    </div>
-  )
-}
-
-function PendingCashCard({
-  amount,
-  count,
-}: {
-  amount: number
-  count: number
-}) {
-  return (
-    <div className="cw-acct cw-acct-pending">
-      <div className="cw-acct-row">
-        <span className="cw-acct-label">EFECTIVO PEND.</span>
-        <span className="cw-acct-icon pending">⌛</span>
-      </div>
-      <div className="cw-acct-amount">${fmtNum(amount)}</div>
-      <div className="cw-acct-meta">
-        {count > 0
-          ? `${count} venta${count === 1 ? '' : 's'} sin conciliar`
-          : 'Nada pendiente'}
-      </div>
-    </div>
-  )
-}

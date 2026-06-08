@@ -31,6 +31,20 @@ const PAGO_MOVIL_RATE = 0.003
 
 const todayISO = () => new Date().toISOString().slice(0, 10)
 
+// Los errores de Supabase (PostgrestError) son objetos planos, no Error, así que
+// String(err) daría "[object Object]". Extraemos message/details/hint.
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (err && typeof err === 'object') {
+    const e = err as { message?: unknown; details?: unknown; hint?: unknown }
+    const parts = [e.message, e.details, e.hint].filter(
+      (p): p is string => typeof p === 'string' && p.length > 0,
+    )
+    if (parts.length) return parts.join(' — ')
+  }
+  return String(err)
+}
+
 export default function NewTransactionModal({
   open,
   onClose,
@@ -158,7 +172,10 @@ export default function NewTransactionModal({
 
     const difUsd = mD - mU
     const binanceUsd = BINANCE_FEE_USD
-    const pagoMovilUsd = aplicaPagoMovil ? mU * PAGO_MOVIL_RATE : 0
+    // El pago móvil es un costo del lado Bs: solo aplica si hay tasa en Bs.
+    // Sin tasa (venta solo en dólares) no hay pago móvil, igual que en Bs.
+    const pagoMovilUsd =
+      aplicaPagoMovil && (tU ?? 0) > 0 ? mU * PAGO_MOVIL_RATE : 0
     const difUsdNeto = difUsd - binanceUsd - pagoMovilUsd
 
     const margenPct = mD > 0 ? (difUsd / mD) * 100 : null
@@ -241,7 +258,7 @@ export default function NewTransactionModal({
       onSaved()
       onClose()
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errorMessage(err))
     } finally {
       setSaving(false)
     }

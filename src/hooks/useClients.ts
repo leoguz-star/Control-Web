@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Client } from '@/types/database'
+import { useIsAdmin } from './useIsAdmin'
 
 const CLIENTS_CHANGED_EVENT = 'clients:changed'
 
 export function useClients() {
+  const isAdmin = useIsAdmin()
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
 
   const reload = useCallback(async () => {
-    const { data } = await supabase.from('clients').select('*').order('name')
+    if (isAdmin === null) return // esperar a saber el rol
+    let q = supabase.from('clients').select('*').order('name')
+    // Admin: solo clientes de la casa. Socio: la RLS ya lo limita a los suyos.
+    if (isAdmin) q = q.is('owner_partner_id', null)
+    const { data } = await q
     if (data) setClients(data as Client[])
     setLoading(false)
-  }, [])
+  }, [isAdmin])
 
   useEffect(() => {
     reload()

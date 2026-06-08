@@ -1,0 +1,170 @@
+================================================================================
+AUDITORÍA DE MOVIMIENTOS DE SOCIOS (USDT / BINANCE P2P)
+Notas de diseño — Control Web
+================================================================================
+
+CONTEXTO
+--------
+- Los socios registran sus VENTAs en USDT en la app.
+- Cada socio tiene su PROPIO Binance.
+- Las ventas se hacen por P2P (USDT -> fiat con clientes).
+- Objetivo: controlar/auditar que lo que registran cuadre con lo real en Binance.
+- Los socios están dispuestos a dar una API key READ-ONLY.
+
+
+================================================================================
+1. LAS TRES FILOSOFÍAS DE AUDITORÍA
+================================================================================
+
+A) FUENTE DE VERDAD DIRECTA DESDE BINANCE (API)
+   - Se jala el historial real desde Binance por API y se concilia.
+   - Lo más fuerte y automático; difícil de falsear.
+
+B) CONCILIACIÓN BASADA EN EVIDENCIA (capturas + refs)
+   - El socio sube captura de la orden de Binance al registrar la venta.
+   - Gemini (ya existe extract-transaction) extrae monto/order ID/contraparte.
+   - El sistema compara contra lo tecleado; mismatch -> "discrepancia".
+   - Baja fricción, sin manejar keys; pero una captura se puede editar.
+
+C) CUADRE DE SALDOS (red de seguridad)
+   - Comparar el saldo BINANCE calculado por el sistema vs. el saldo real.
+   - Si divergen más de un umbral, falta registrar algo.
+   - Lo más difícil de burlar a largo plazo: el dinero tiene que cuadrar.
+
+
+================================================================================
+2. CÓMO FUNCIONA LA API DE BINANCE (para P2P)
+================================================================================
+- Una "API key read-only" es en realidad un par KEY + SECRET. Read-only solo
+  limita permisos (solo lectura; sin trade ni retiro). Se necesitan AMBOS: el
+  secret firma cada request (HMAC SHA256).
+- Endpoint clave (historial P2P / C2C):
+      GET /sapi/v1/c2c/orderMatch/listUserOrderHistory
+  Filtrando tradeType = SELL y asset = USDT se obtiene: monto USDT, precio fiat,
+  fecha, contraparte (nickname), nº de orden y estado (COMPLETED).
+- TODO corre del lado del servidor (Edge Function). El secret NUNCA toca el
+  navegador.
+
+
+================================================================================
+3. ENFOQUE RECOMENDADO: KEY READ-ONLY POR SOCIO (P2P)
+================================================================================
+
+DECISIONES PREVIAS
+- ¿Dónde corre el job de sincronización? (afecta el IP whitelist de Binance)
+    * Edge Function de Supabase: IP de salida NO fija -> el socio no puede
+      restringir la key por IP. Riesgo bajo (read-only). Más simple. RECOMENDADO
+      para empezar.
+    * Worker con IP fija (VPS/cron externo): permite restringir la key a tu IP.
+      Más seguro, pero infra extra. Migrar a esto si se quiere blindar.
+- ¿Cómo guardar el secret? Cifrado en reposo (Supabase Vault / pgsodium),
+  descifrado solo dentro de la función. Nunca en texto plano ni en frontend.
+
+PASOS (ROADMAP POR FASES)
+
+  FASE 1 — Guardar las keys
+   - En Configuración, el socio (o admin) pega su KEY + SECRET.
+   - Se guardan cifrados, ligados al partner_id.
+   - Llamada de prueba para validar que la key sirve y es read-only.
+   - (Socio: Binance -> API Management -> Create API -> habilitar SOLO
+     "Enable Reading" -> copiar key+secret.)
+
+  FASE 2 — Sincronizar el historial P2P
+   - Edge Function que por cada socio firma y llama al historial P2P, trae las
+     órdenes SELL/USDT de una ventana y las guarda en una tabla (binance_orders:
+     nº orden, monto USDT, fiat, precio, estado, fecha, contraparte).
+   - Disparada programada (Supabase cron cada X horas) y/o botón "Sincronizar".
+
+  FASE 3 — Conciliar contra lo registrado
+   - Cruzar cada orden de Binance con las VENTAs del socio:
+       * Cuadra (orden <-> venta)         -> AUDITADO
+       * Orden sin venta registrada       -> vendió y no lo registró (faltante)
+       * Venta sin orden                  -> registró sin respaldo (inflado/falso)
+       * Montos distintos                 -> DISCREPANCIA
+   - Cruce por order ID (campo binance_order_id en la transacción) y, si no, por
+     heurística (monto USDT + fecha + precio aproximado).
+
+  FASE 4 — Lo que ve el admin
+   - En el drill-down del socio: cada venta con su estado de auditoría
+     (auditado / discrepancia / sin respaldo).
+   - Panel "Por auditar / Discrepancias" por socio.
+
+  FASE 5 — Endurecer
+   - Cuadre de saldo BINANCE (sistema vs. real por API) como chequeo de cierre.
+   - Paginación, rate-limits, rotación de keys, alertas.
+
+LA TRAMPA QUE LA API NO CUBRE
+   - La API solo audita la cuenta cuya key te dieron. Un socio podría operar en
+     OTRA cuenta no reportada.
+   - Mitigar: cruzar contrapartes/clientes conocidos + cuadre de saldo (Fase 5).
+   - Conclusión: combinar API + cuadre de saldo, no solo uno.
+
+
+================================================================================
+4. ESCENARIO ALTERNATIVO: SUB-CUENTAS DE TU PROPIO BINANCE
+================================================================================
+(Qué cambiaría si los socios operaran como sub-cuentas de TU Binance maestro,
+en vez de tener cada uno su Binance independiente.)
+
+CÓMO FUNCIONARÍA LA AUDITORÍA
+ - UNA sola API key: la de la cuenta MAESTRA (tuya), read-only. No hace falta
+   recolectar una key por socio. Esa es la gran ventaja.
+ - Desde la maestra ves TODO de cada sub-cuenta por API:
+       * Lista de sub-cuentas:        /sapi/v1/sub-account/list
+       * Balances por sub-cuenta:     /sapi/v3/sub-account/assets
+       * Resumen spot:                /sapi/v1/sub-account/spotSummary
+       * Historial de transferencias internas (master <-> sub y entre subs)
+       * Depósitos de cada sub-cuenta
+ - La conciliación se vuelve mucho más fuerte:
+       * Ves el SALDO REAL de cada sub-cuenta en tiempo real.
+       * Ves CADA transferencia de entrada/salida.
+       * Controlas las sub-cuentas (crear, congelar, permisos de retiro).
+
+POR QUÉ ES MEJOR EN CONTROL
+ - TÚ creas y eres dueño de las sub-cuentas; el socio opera DENTRO de algo que tú
+   controlas. La "trampa de la otra cuenta" casi desaparece, porque su capital y
+   su operación viven en tu estructura.
+ - Puedes limitar retiros externos, congelar, y ver el dinero entrar y salir.
+
+EL GRAN PERO: P2P NO CORRE EN SUB-CUENTAS
+ - El P2P (C2C) de Binance es, por regla general, una función SOLO de la cuenta
+   PRINCIPAL. Las sub-cuentas suelen poder spot/margin/futures, pero NO P2P.
+ - Como la venta real (USDT -> fiat) hoy se hace por P2P, una sub-cuenta no
+   podría ser donde ocurre la venta.
+ - Implicaciones / opciones si se va por sub-cuentas:
+     * Cambiar el modelo de venta (P2P en la maestra; o spot/OTC en las subs; o
+       el socio sigue usando su cuenta principal para P2P y liquida hacia la
+       sub-cuenta).
+     * O mantener el enfoque de key read-only por socio para auditar el P2P, y
+       usar sub-cuentas solo si se reestructura cómo venden.
+ - IMPORTANTE: confirmar con Binance la disponibilidad de sub-cuentas y P2P según
+   el tipo/tier de tu cuenta (varía por región y verificación).
+
+COMPARACIÓN RÁPIDA
+                         | Key read-only por socio   | Sub-cuentas de tu maestra
+ ------------------------+---------------------------+--------------------------
+ Nº de keys a manejar    | Una por socio             | Una (la maestra)
+ Soporta P2P             | SÍ (es el caso de uso)    | NO (P2P es main-only)
+ Visibilidad             | Solo lo que el socio da   | Total (tú eres dueño)
+ Control operativo       | Ninguno (solo lectura)    | Alto (creas/congelas subs)
+ "Trampa de otra cuenta" | Posible                   | Casi nula
+ Esfuerzo / cambio       | Bajo (encaja con hoy)     | Alto (reestructurar todo)
+
+CONCLUSIÓN SOBRE SUB-CUENTAS
+ - Sub-cuentas = máximo control y visibilidad, pero choca con P2P.
+ - Si el negocio es esencialmente P2P, lo natural es: KEY READ-ONLY POR SOCIO
+   para auditar + CUADRE DE SALDO como red de seguridad.
+ - Las sub-cuentas tienen sentido si están dispuestos a cambiar el modelo de
+   venta (dejar P2P en las subs) a cambio de control total.
+
+
+================================================================================
+5. DECISIÓN ABIERTA / SIGUIENTE PASO
+================================================================================
+ - Arranque sugerido: Edge Function (sin IP whitelist) para validar el flujo con
+   un socio real; migrar a worker con IP fija si se quiere blindar.
+ - Primer entregable natural: FASE 1 (modelo de datos para keys cifradas +
+   pantalla en Configuración + validación de la key).
+ - Pendiente de decidir: ¿P2P con key por socio (encaja con hoy) o reestructurar
+   a sub-cuentas (más control, pierde P2P)?
+================================================================================

@@ -2,19 +2,32 @@ import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAuth } from '@/hooks/useAuth'
+import { useIsAdmin } from '@/hooks/useIsAdmin'
+import { useCurrentPartner } from '@/hooks/useCurrentPartner'
 import Icon from './Icon'
-
-const tabs = [
-  { to: '/', label: 'Dashboard', end: true },
-  { to: '/transacciones', label: 'Transacciones' },
-  { to: '/importar', label: 'Importar' },
-  { to: '/chatbot', label: 'Asistente' },
-]
 
 export default function Layout() {
   const { user } = useAuth()
+  const isAdmin = useIsAdmin()
+  const partner = useCurrentPartner()
   const [menuOpen, setMenuOpen] = useState(false)
   const location = useLocation()
+
+  // Nombre del socio/admin; cae al email si aún no está vinculado.
+  const displayName = partner?.name ?? user?.email ?? ''
+
+  // "Cajas de socios" y "Configuración" solo para admins.
+  const tabs = [
+    { to: '/', label: 'Dashboard', end: true },
+    { to: '/transacciones', label: 'Transacciones' },
+    ...(isAdmin
+      ? [
+          { to: '/cajas', label: 'Cajas de socios' },
+          { to: '/configuracion', label: 'Configuración' },
+        ]
+      : []),
+    { to: '/chatbot', label: 'Asistente' },
+  ]
 
   // Cierra el drawer al navegar (cuando el path cambia)
   useEffect(() => {
@@ -76,7 +89,7 @@ export default function Layout() {
 
         <div className="cw-nav-right">
           <Icon name="bell" size={18} style={{ cursor: 'pointer' }} />
-          {user?.email && <span className="user">{user.email}</span>}
+          {displayName && <span className="user">{displayName}</span>}
           <span className="logout" onClick={() => supabase.auth.signOut()}>
             Salir
           </span>
@@ -121,8 +134,8 @@ export default function Layout() {
             </div>
 
             <div className="cw-drawer-foot">
-              {user?.email && (
-                <div className="cw-drawer-user">{user.email}</div>
+              {displayName && (
+                <div className="cw-drawer-user">{displayName}</div>
               )}
               <button
                 type="button"

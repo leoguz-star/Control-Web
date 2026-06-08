@@ -3,10 +3,15 @@ export type TransactionStatus = 'PENDIENTE' | 'CONCILIADO'
 export type CommissionKind = 'ACUMULADO' | 'COBRADO'
 export type AccountKind = 'FIAT' | 'CRYPTO'
 
+export type PartnerRole = 'ADMIN' | 'SOCIO'
+
 export interface Partner {
   id: string
   name: string
   commission_share: number
+  role: PartnerRole
+  is_capital_partner: boolean
+  is_house_operator: boolean
   user_id: string | null
   created_at: string
 }
@@ -19,12 +24,14 @@ export interface Account {
   initial_balance: number
   sort_order: number
   is_active: boolean
+  owner_partner_id: string | null
 }
 
 export interface Client {
   id: string
   name: string
   notes: string | null
+  owner_partner_id: string | null
   created_at: string
 }
 
@@ -37,6 +44,7 @@ export interface Transaction {
   account_id: string | null
   destination_account_id: string | null
   partner_id: string | null
+  owner_partner_id: string | null
   monto_usdt: number | null
   tasa_usdt: number | null
   ref: string | null
@@ -70,6 +78,18 @@ export interface BolivarSummary {
 export interface AccountBalance {
   id: string
   name: string
+  kind: AccountKind
+  currency: 'USD' | 'USDT'
+  sort_order: number
+  owner_partner_id: string | null
+  balance: number
+}
+
+export interface PartnerCashBalance {
+  partner_id: string
+  partner_name: string
+  account_id: string
+  account_name: string
   kind: AccountKind
   currency: 'USD' | 'USDT'
   sort_order: number

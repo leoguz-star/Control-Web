@@ -1,8 +1,9 @@
 import { FormEvent, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { loginIdToEmail } from '@/lib/socio'
 
 export default function Login() {
-  const [email, setEmail] = useState('')
+  const [userId, setUserId] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
@@ -11,9 +12,11 @@ export default function Login() {
     e.preventDefault()
     setLoading(true)
     setError(null)
+    // Socios entran por nombre; admins por email. loginIdToEmail resuelve ambos.
+    const email = loginIdToEmail(userId)
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     setLoading(false)
-    if (error) setError(error.message)
+    if (error) setError('Usuario o contraseña incorrectos')
   }
 
   return (
@@ -46,12 +49,13 @@ export default function Login() {
         </p>
 
         <div style={{ marginBottom: 14 }}>
-          <label className="input-lbl">Email</label>
+          <label className="input-lbl">Usuario</label>
           <input
-            type="email"
+            type="text"
             required
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            value={userId}
+            onChange={(e) => setUserId(e.target.value)}
+            placeholder="Tu nombre"
             className="input"
           />
         </div>

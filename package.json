@@ -5,8 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:staging": "vite --mode staging",
     "build": "tsc -b && vite build",
+    "build:staging": "tsc -b && vite build --mode staging",
     "preview": "vite preview",
+    "preview:staging": "vite preview --mode staging",
     "lint": "eslint ."
   },
   "dependencies": {

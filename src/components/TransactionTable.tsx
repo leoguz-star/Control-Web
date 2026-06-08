@@ -14,6 +14,8 @@ interface Props {
   rows: TransactionRow[]
   onChanged: () => void
   onEdit?: (row: TransactionRow) => void
+  /** Solo lectura: sin cambiar estatus, editar ni eliminar (drill-down del admin). */
+  readOnly?: boolean
 }
 
 const CAT_CLASS: Record<string, string> = {
@@ -24,7 +26,12 @@ const CAT_CLASS: Record<string, string> = {
   'AJUSTE-': 'ajuste-minus',
 }
 
-export default function TransactionTable({ rows, onChanged, onEdit }: Props) {
+export default function TransactionTable({
+  rows,
+  onChanged,
+  onEdit,
+  readOnly = false,
+}: Props) {
   const columns = useMemo<ColumnDef<TransactionRow>[]>(
     () => [
       {
@@ -192,6 +199,10 @@ export default function TransactionTable({ rows, onChanged, onEdit }: Props) {
         header: 'Estatus',
         cell: ({ getValue, row }) => {
           const v = getValue<'PENDIENTE' | 'CONCILIADO'>()
+          const cls = `cw-status ${v === 'CONCILIADO' ? 'conciled' : 'pending'}`
+          if (readOnly) {
+            return <span className={cls}>{v}</span>
+          }
           const next = v === 'PENDIENTE' ? 'CONCILIADO' : 'PENDIENTE'
           return (
             <button
@@ -202,7 +213,7 @@ export default function TransactionTable({ rows, onChanged, onEdit }: Props) {
                   .eq('id', row.original.id)
                 if (!error) onChanged()
               }}
-              className={`cw-status ${v === 'CONCILIADO' ? 'conciled' : 'pending'}`}
+              className={cls}
               title="Click para cambiar estatus"
               style={{ border: 0, cursor: 'pointer' }}
             >
@@ -211,37 +222,41 @@ export default function TransactionTable({ rows, onChanged, onEdit }: Props) {
           )
         },
       },
-      {
-        id: 'actions',
-        header: '',
-        cell: ({ row }) => (
-          <div className="cw-row-actions">
-            {onEdit && (
-              <button
-                className="btn btn-ghost"
-                onClick={() => onEdit(row.original)}
-              >
-                Editar
-              </button>
-            )}
-            <button
-              className="btn btn-danger-ghost"
-              onClick={async () => {
-                if (!confirm('¿Eliminar esta transacción?')) return
-                const { error } = await supabase
-                  .from('transactions')
-                  .delete()
-                  .eq('id', row.original.id)
-                if (!error) onChanged()
-              }}
-            >
-              Eliminar
-            </button>
-          </div>
-        ),
-      },
+      ...(readOnly
+        ? []
+        : [
+            {
+              id: 'actions',
+              header: '',
+              cell: ({ row }) => (
+                <div className="cw-row-actions">
+                  {onEdit && (
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => onEdit(row.original)}
+                    >
+                      Editar
+                    </button>
+                  )}
+                  <button
+                    className="btn btn-danger-ghost"
+                    onClick={async () => {
+                      if (!confirm('¿Eliminar esta transacción?')) return
+                      const { error } = await supabase
+                        .from('transactions')
+                        .delete()
+                        .eq('id', row.original.id)
+                      if (!error) onChanged()
+                    }}
+                  >
+                    Eliminar
+                  </button>
+                </div>
+              ),
+            } as ColumnDef<TransactionRow>,
+          ]),
     ],
-    [onChanged, onEdit]
+    [onChanged, onEdit, readOnly]
   )
 
   const table = useReactTable({
